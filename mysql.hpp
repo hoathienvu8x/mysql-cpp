@@ -1,6 +1,10 @@
 #ifndef MYSQL_HPP
 #define MYSQL_HPP
 
+#include <iostream>
+#include <cstring>
+#include <vector>
+#include <map>
 #include <mysql/mysql.h>
 
 class mysql;
@@ -29,7 +33,20 @@ class mysql {
 
         Stmt   prepare(std::string s);
         Result query(std::string s);
-
+        inline
+        int insert_id() {
+            if(handle) {
+                return mysql_insert_id(handle);
+            }
+            return -1;
+        }
+        inline
+        int affected_rows() {
+            if (handle) {
+                return mysql_affected_rows(handle);
+            }
+            return -1;
+        }
         inline
         int more_results() {
             return mysql_more_results(handle);
@@ -182,7 +199,20 @@ class Result {
 
         Result& operator=(const Result&) = delete;
         Result(const Result&) = delete;
-
+        std::map<std::string,std::string> fetch_array() {
+            Row row = fetch_row();
+            if (!row) return {};
+            std::vector<std::string> keys;
+            MYSQL_FIELD *fields = mysql_fetch_fields(res);
+            for(int i = 0; i < num_fields; i++) {
+                keys.push_back(std::string(fields[i].name));
+            }
+            std::map<std::string, std::string> data;
+            for(int i = 0; i < num_fields; i++) {
+                data[keys[i]] = row[i];
+            }
+            return data;
+        }
         Row fetch_row() {
             MYSQL_ROW row = mysql_fetch_row(res);
             unsigned long* lengths = mysql_fetch_lengths(res);
@@ -192,6 +222,10 @@ class Result {
         inline
         Row next() {
             return fetch_row();
+        }
+        inline
+        std::map<std::string,std::string> next_array() {
+            return fetch_array();
         }
 };
 
