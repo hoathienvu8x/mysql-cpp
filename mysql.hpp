@@ -5,32 +5,73 @@
 #include <cstring>
 #include <vector>
 #include <map>
+#include <mutex>
 #include <mysql/mysql.h>
 
 class mysql;
 class Stmt;
 class Result;
 
+std::string escape_string(std::string val) {
+    std::string result = "";
+    size_t pev = -1;
+    for(size_t i = 0; i < val.length(); ++i) {
+        pev = i - 1;
+        switch(val.at(i)) {
+            case '\'': case '\n' : case '\r': case '\t': case '\v': case '\f': case '\\': case '"': {
+                if(pev >= 0) {
+                    if (val.at(pev) != '\\') { result.append(1, '\\'); }
+                } else {
+                    result.append(1, '\\');
+                }
+                if (val.at(i) == '\n') { result += "\\n"; }
+                else if (val.at(i) == '\r') { result += "\\r"; }
+                else if (val.at(i) == '\t') { result += "\\t"; }
+                else if (val.at(i) == '\f') { result += "\\f"; }
+                else if (val.at(i) == '\v') { result += "\\v"; }
+                else { result.append(1, val.at(i)); }
+            } break;
+            default: result.append(1, val.at(i)); break;
+        }
+    }
+    return result;
+}
+
 class mysql {
     public:
         mysql() : handle(mysql_init(0)) {}
 
         ~mysql() {
-            if (handle) {
-                mysql_close(handle);
-            }
+            close();
         }
 
         bool connect(
                 const char* host, const char* user, const char* password,
                 const char* db, unsigned int port, const char* unix_socket, unsigned long client_flag) {
+            if (is_open()) close();
+            std::lock_guard<std::mutex> mg(mutex);
+            handle = mysql_init(nullptr);
+            if (handle == nullptr) return false;
             MYSQL* h = mysql_real_connect(handle, host, user, password,
                                           db, port, unix_socket, client_flag);
             if (h) return true;
             std::cerr << "Failed to connect to database: Error: " << mysql_error(handle) << "\n";
+            mysql_close(handle);
+            handle = nullptr;
             return false;
         }
-
+        void close() {
+            std::lock_guard<std::mutex> mg(mutex);
+            if (handle != nullptr) {
+                mysql_close(handle);
+                handle = nullptr;
+            }
+        }
+        bool is_open() const {
+            if(handle == nullptr) return false;
+            std::lock_guard<std::mutex> mg(mutex);
+            return mysql_ping(handle) == 0;
+        }
         Stmt   prepare(std::string s);
         Result query(std::string s);
         inline
@@ -56,7 +97,7 @@ class mysql {
         inline Result use_result();
     private:
         MYSQL* handle;
-
+        mutable std::mutex mutex;
 };
 
 class Stmt {
@@ -247,6 +288,7 @@ int mysql::next_result()
 }
 
 Stmt mysql::prepare(std::string s) {
+    std::lock_guard<std::mutex> mg(mutex);
     MYSQL_STMT* stmt = mysql_stmt_init(handle);
     int x = mysql_stmt_prepare(stmt, s.c_str(), s.size());
     if (x != 0) {
@@ -256,6 +298,7 @@ Stmt mysql::prepare(std::string s) {
 }
 
 Result mysql::query(std::string s) {
+    std::lock_guard<std::mutex> mg(mutex);
     int x = mysql_real_query(handle, s.c_str(), s.size());
     if (x != 0) {
         std::cerr << "Error: " << mysql_error(handle) << "\n";
